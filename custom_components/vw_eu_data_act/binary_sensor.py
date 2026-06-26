@@ -48,11 +48,17 @@ async def async_setup_entry(
 class EudaBinarySensor(EudaEntity, BinarySensorEntity):
     """A curated boolean sensor."""
 
+    _attr_has_entity_name = True  # Sagt HA, dass der Name aus der Übersetzung kommt
+
     def __init__(self, coordinator: EudaCoordinator, curated: CuratedBinary) -> None:
         super().__init__(coordinator)
         self._curated = curated
         self._attr_unique_id = f"{coordinator.vin}_{curated.field_name}"
-        self._attr_name = curated.name
+        
+        # Nutzen den Feldnamen als Schlüssel für die de.json.
+        # Punkte werden durch Unterstriche ersetzt, falls doch mal ein dotted-Feld auftaucht.
+        self._attr_translation_key = curated.field_name.replace(".", "_")
+        
         if curated.icon:
             self._attr_icon = curated.icon
         if curated.device_class:

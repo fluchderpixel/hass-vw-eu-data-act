@@ -4,42 +4,68 @@
       "user": {
         "title": "VW Group EU Data Act",
         "description": "Wählen Sie Ihre Fahrzeugmarke. Alle Marken des VW-Konzerns werden über das EU Data Act Portal unterstützt.",
-        "data": {
-          "brand": "Marke"
-        }
+        "data": { "brand": "Marke" }
       },
       "credentials": {
         "title": "Anmeldung",
-        "description": "Geben Sie Ihre VW-ID Zugangsdaten ein (dieselben wie auf eu-data-act.drivesomethinggreater.com).",
-        "data": {
-          "email": "E-Mail",
-          "password": "Passwort"
-        }
+        "description": "Geben Sie Ihre VW-ID Zugangsdaten ein.",
+        "data": { "email": "E-Mail", "password": "Passwort" }
       },
       "vehicle": {
         "title": "Fahrzeug auswählen",
-        "data": {
-          "vin": "Fahrzeug"
-        }
+        "data": { "vin": "Fahrzeug" }
       },
       "reauth_confirm": {
         "title": "Erneut anmelden",
         "description": "Geben Sie das Passwort für {email} ein.",
-        "data": {
-          "password": "Passwort"
-        }
+        "data": { "password": "Passwort" }
       }
     },
     "error": {
-      "invalid_auth": "E-Mail oder Passwort falsch. Bei Škoda/Audi/SEAT/CUPRA stellen Sie sicher, dass die richtige Marke ausgewählt ist.",
+      "invalid_auth": "E-Mail oder Passwort falsch.",
       "cannot_connect": "Verbindung zum EU Data Act Portal nicht möglich.",
-      "no_vehicles": "Keine Fahrzeuge für dieses Konto gefunden. Stellen Sie sicher, dass Ihr Fahrzeug auf eu-data-act.drivesomethinggreater.com verknüpft ist.",
+      "no_vehicles": "Keine Fahrzeuge für dieses Konto gefunden.",
       "unknown": "Ein unerwarteter Fehler ist aufgetreten."
     },
     "abort": {
       "already_configured": "Dieses Fahrzeug ist bereits konfiguriert.",
-      "auth": "Authentifizierung fehlgeschlagen; bitte die Integration erneut hinzufügen.",
+      "auth": "Authentifizierung fehlgeschlagen.",
       "reauth_successful": "Erneute Authentifizierung erfolgreich."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "mileage": { "name": "Kilometerstand" },
+      "short_term_data_mileage": { "name": "Strecke (Letzte Fahrt)" },
+      "short_term_data_travel_time": { "name": "Fahrzeit (Letzte Fahrt)" },
+      "cruising_range_combined": { "name": "Diesel Reichweite" },
+      "scr_range": { "name": "AdBlue Reichweite" },
+      "fuel_level_current_level": { "name": "Tankfüllstand" },
+      "oil_level_actual_level": { "name": "Motoröl Füllstand (Messbereich)" },
+      "maintenance_interval_distance_until_oil_change": { "name": "Service km bis Ölwechsel" },
+      "maintenance_interval__time_until_oil_change": { "name": "Service Tage bis Ölwechsel" },
+      "maintenance_interval_distance_until_inspection": { "name": "Service km bis Inspektion" },
+      "maintenance_interval__time_until_inspection": { "name": "Service Tage bis Inspektion" },
+      "outside_temperature": { "name": "Außentemperatur" },
+      "short_term_data_average_fuel_consumption": { "name": "Verbrauch letzte Fahrt" }
+    },
+    "binary_sensor": {
+      "locked": { "name": "Fahrzeug verriegelt" },
+      "parking_brake": { "name": "Parkbremse Status" },
+      "parking_lights": { "name": "Parklicht Status" },
+      "open_state_front_left_door": { "name": "Fahrertür" },
+      "open_state_front_right_door": { "name": "Beifahrertür" },
+      "open_state_rear_left_door": { "name": "Schiebetür links" },
+      "open_state_rear_right_door": { "name": "Schiebetür rechts" },
+      "open_state_tailgate": { "name": "Heckklappe" },
+      "open_state_front_engine_bonnet": { "name": "Motorhaube" },
+      "locked_state_front_left_door": { "name": "Fahrertür Schloss" },
+      "locked_state_front_right_door": { "name": "Beifahrertür Schloss" },
+      "locked_state__rear_left_door": { "name": "Schiebetür links Schloss" },
+      "locked_state_rear_right_door": { "name": "Schiebetür rechts Schloss" },
+      "locked_state_tailgate": { "name": "Heckklappe Schloss" },
+      "state_front_left_door_window_lifter": { "name": "Fenster vorne links" },
+      "state_front_right_door_window_lifter": { "name": "Fenster vorne rechts" }
     }
   }
 }

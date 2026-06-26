@@ -124,11 +124,17 @@ async def async_setup_entry(
 class EudaCuratedSensor(EudaEntity, SensorEntity):
     """A curated, well-typed sensor (enabled by default)."""
 
+    _attr_has_entity_name = True  # Sagt HA, dass der Name aus der Übersetzung kommt
+
     def __init__(self, coordinator: EudaCoordinator, curated: CuratedSensor) -> None:
         super().__init__(coordinator)
         self._curated = curated
         self._attr_unique_id = f"{coordinator.vin}_{curated.field_name}"
-        self._attr_name = curated.name
+        
+        # Nutzen den Feldnamen als Schlüssel für die de.json.
+        # Punkte werden durch Unterstriche ersetzt, da HA-Translation-Keys kein "." erlauben.
+        self._attr_translation_key = curated.field_name.replace(".", "_")
+        
         if curated.icon:
             self._attr_icon = curated.icon
         if curated.device_class:
@@ -179,9 +185,6 @@ class EudaCuratedSensor(EudaEntity, SensorEntity):
 
     @property
     def native_unit_of_measurement(self) -> str | None:
-        # When a companion unit field is declared (e.g. mileage.unit), resolve
-        # the unit at runtime so miles vs km is reported correctly per vehicle;
-        # otherwise use the static curated unit.
         cur = self._curated
         if cur.unit_field:
             dp = find_by_field(self.coordinator.data or {}, cur.unit_field)
@@ -203,11 +206,8 @@ class EudaRawSensor(EudaEntity, SensorEntity):
         super().__init__(coordinator)
         dp = coordinator.data[key]
         self._key = key
-        # Namespace by VIN: dataset keys are shared across vehicles, so a bare
-        # key collides between config entries (see raw_unique_id / migration).
         self._attr_unique_id = raw_unique_id(coordinator.vin, key)
         self._attr_name = friendly_name(dp.field_name, dp.description)
-        # only attach a unit when the value is numeric
         if dp.unit and dp.type_hint in ("int", "float"):
             self._attr_native_unit_of_measurement = dp.unit
 
