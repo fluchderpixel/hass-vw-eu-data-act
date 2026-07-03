@@ -6,7 +6,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import EudaConfigEntry
@@ -29,20 +29,37 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data.coordinator
-    points: dict[str, DataPoint] = coordinator.data or {}
-    present_fields = {dp.field_name for dp in points.values()}
 
-    # Detect dataset format and select appropriate curated group
-    format_type = detect_dataset_format(points)
-    curated_binary = (
-        CURATED_BINARY_DOTTED if format_type == "dotted" else CURATED_BINARY_FLAT
-    )
+    # A curated field may be missing from the dataset current at startup and
+    # only turn up in a later one. The coordinator merges each dataset into its
+    # data, so add entities for any newly-seen field on every refresh rather
+    # than only from the first dataset (see sensor.py for the same pattern).
+    added: set[str] = set()
 
-    async_add_entities(
-        EudaBinarySensor(coordinator, curated)
-        for curated in curated_binary
-        if curated.field_name in present_fields
-    )
+    @callback
+    def _add_new_entities() -> None:
+        points: dict[str, DataPoint] = coordinator.data or {}
+        present_fields = {dp.field_name for dp in points.values()}
+
+        # Detect dataset format and select appropriate curated group
+        format_type = detect_dataset_format(points)
+        curated_binary = (
+            CURATED_BINARY_DOTTED if format_type == "dotted" else CURATED_BINARY_FLAT
+        )
+
+        entities = []
+        for curated in curated_binary:
+            if curated.field_name in added:
+                continue
+            if curated.field_name in present_fields:
+                entities.append(EudaBinarySensor(coordinator, curated))
+                added.add(curated.field_name)
+
+        if entities:
+            async_add_entities(entities)
+
+    _add_new_entities()
+    entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
 
 
 class EudaBinarySensor(EudaEntity, BinarySensorEntity):
