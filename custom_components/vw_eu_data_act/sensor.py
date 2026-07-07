@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import EudaConfigEntry
@@ -84,41 +84,63 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data.coordinator
-    points: dict[str, DataPoint] = coordinator.data or {}
-    present_fields = {dp.field_name for dp in points.values()}
 
-    # Detect dataset format and select appropriate curated group
-    format_type = detect_dataset_format(points)
-    curated_sensors = (
-        CURATED_SENSORS_DOTTED if format_type == "dotted" else CURATED_SENSORS_FLAT
-    )
-    curated_binary = (
-        CURATED_BINARY_DOTTED if format_type == "dotted" else CURATED_BINARY_FLAT
-    )
+    # A field may be absent from the dataset that happens to be current at
+    # startup and only appear in a later one (e.g. SOC / mileage aren't in
+    # every snapshot). The coordinator merges each dataset into its data, so we
+    # add entities for any newly-seen field on every refresh rather than only
+    # from the first dataset — otherwise those sensors would never be created.
+    added_curated: set[str] = set()
+    added_raw: set[str] = set()
 
-    # Build field sets for exclusion from raw sensors
-    binary_fields = {b.field_name for b in curated_binary}
-    curated_sensor_fields = {s.field_name for s in curated_sensors}
+    @callback
+    def _add_new_entities() -> None:
+        points: dict[str, DataPoint] = coordinator.data or {}
+        present_fields = {dp.field_name for dp in points.values()}
 
-    entities: list[SensorEntity] = []
+        # Detect dataset format and select appropriate curated group
+        format_type = detect_dataset_format(points)
+        curated_sensors = (
+            CURATED_SENSORS_DOTTED if format_type == "dotted" else CURATED_SENSORS_FLAT
+        )
+        curated_binary = (
+            CURATED_BINARY_DOTTED if format_type == "dotted" else CURATED_BINARY_FLAT
+        )
 
-    # curated numeric / text sensors (one per field, if present)
-    for curated in curated_sensors:
-        # Special handling for timestamp sensors (e.g., "mileage.timestamp" or "mileage.value.timestamp")
-        if ".timestamp" in curated.field_name:
-            base_field = curated.field_name.replace(".timestamp", "")
-            if base_field in present_fields:
+        # Build field sets for exclusion from raw sensors
+        binary_fields = {b.field_name for b in curated_binary}
+        curated_sensor_fields = {s.field_name for s in curated_sensors}
+
+        entities: list[SensorEntity] = []
+
+        # curated numeric / text sensors (one per field, if present)
+        for curated in curated_sensors:
+            if curated.field_name in added_curated:
+                continue
+            # Special handling for timestamp sensors (e.g., "mileage.timestamp" or "mileage.value.timestamp")
+            if ".timestamp" in curated.field_name:
+                base_field = curated.field_name.replace(".timestamp", "")
+                if base_field in present_fields:
+                    entities.append(EudaCuratedSensor(coordinator, curated))
+                    added_curated.add(curated.field_name)
+            elif curated.field_name in present_fields:
                 entities.append(EudaCuratedSensor(coordinator, curated))
-        elif curated.field_name in present_fields:
-            entities.append(EudaCuratedSensor(coordinator, curated))
+                added_curated.add(curated.field_name)
 
-    # raw diagnostic sensors: every other unique key
-    for key, dp in points.items():
-        if dp.field_name in curated_sensor_fields or dp.field_name in binary_fields:
-            continue
-        entities.append(EudaRawSensor(coordinator, key))
+        # raw diagnostic sensors: every other unique key
+        for key, dp in points.items():
+            if key in added_raw:
+                continue
+            if dp.field_name in curated_sensor_fields or dp.field_name in binary_fields:
+                continue
+            entities.append(EudaRawSensor(coordinator, key))
+            added_raw.add(key)
 
-    async_add_entities(entities)
+        if entities:
+            async_add_entities(entities)
+
+    _add_new_entities()
+    entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
 
 
 class EudaCuratedSensor(EudaEntity, SensorEntity):
@@ -146,6 +168,11 @@ class EudaCuratedSensor(EudaEntity, SensorEntity):
 
     @property
     def native_value(self):
+        # car_captured_time appears in many report clusters; Dataset.from_json
+        # already picks the latest value as captured_at on the coordinator.
+        if self._curated.field_name == "car_captured_time":
+            return self._sticky(self.coordinator.captured_at)
+
         # Special handling for timestamp fields (both "mileage.timestamp" and "mileage.value.timestamp")
         if ".timestamp" in self._curated.field_name:
             base_field = self._curated.field_name.replace(".timestamp", "")

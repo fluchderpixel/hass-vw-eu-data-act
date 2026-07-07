@@ -82,6 +82,7 @@ class EudaCoordinator(DataUpdateCoordinator[dict[str, DataPoint]]):
         self.vin: str = entry.data[CONF_VIN]
         self.identifier: str = entry.data[CONF_IDENTIFIER]
         self.latest_dataset: Dataset | None = None
+        self.captured_at: datetime | None = None
         self._is_initial_setup: bool = True
 
     async def _async_update_data(self) -> dict[str, DataPoint]:
@@ -186,6 +187,16 @@ class EudaCoordinator(DataUpdateCoordinator[dict[str, DataPoint]]):
             ) from last_error
 
         self._reschedule(listing)
+
+        # Track the latest captured_at timestamp. A dataset can lack any
+        # parseable car_captured_time (captured_at is None), so only fold in
+        # real values and never let max() compare against None.
+        new_captured_at = self.latest_dataset.captured_at
+        if new_captured_at is not None:
+            if self.captured_at is None:
+                self.captured_at = new_captured_at
+            else:
+                self.captured_at = max(self.captured_at, new_captured_at)
 
         # Merge new data with existing to preserve missing fields
         if self.data:
