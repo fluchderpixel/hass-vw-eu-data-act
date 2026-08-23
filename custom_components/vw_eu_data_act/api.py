@@ -216,6 +216,11 @@ class EudaApiClient:
         async with await self._get(authorize_url) as resp:
             signin_url = str(resp.url)
             signin_html = await resp.text()
+            if resp.status >= 500:
+                raise ApiError(
+                    f"Identity provider error on sign-in page (HTTP {resp.status})",
+                    status=resp.status,
+                )
         _LOGGER.debug("login step2: signin page = %s (%d bytes)", signin_url, len(signin_html))
 
         # 2. POST the email (identifier step). Fields come from HTML inputs
@@ -239,6 +244,11 @@ class EudaApiClient:
         _LOGGER.debug(
             "login step3: after identifier POST status=%s url=%s", status, authenticate_url
         )
+        if status >= 500:
+            raise ApiError(
+                f"Identity provider error on identifier step (HTTP {status})",
+                status=status,
+            )
 
         # 3. The identifier step lands on the password (authenticate) page,
         #    whose hidden fields live in the JS templateModel, not HTML inputs.
@@ -275,6 +285,14 @@ class EudaApiClient:
                 _LOGGER.debug(
                     "login step4: HTTP %s body[:500]=%s", resp.status, landing_html[:500]
                 )
+                # 5xx is the identity provider failing, not our credentials —
+                # surface it as a retryable ApiError so the coordinator keeps
+                # the session alive instead of demanding reauthentication.
+                if resp.status >= 500:
+                    raise ApiError(
+                        f"Identity provider error (HTTP {resp.status})",
+                        status=resp.status,
+                    )
                 err = _login_error(landing_html)
                 raise AuthError(err or f"Login rejected (HTTP {resp.status})")
         _LOGGER.debug("login step4: landed on %s", landing)
