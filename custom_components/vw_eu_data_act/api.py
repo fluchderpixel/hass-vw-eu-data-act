@@ -46,6 +46,17 @@ class AuthError(ApiError):
     """Authentication failed or session expired."""
 
 
+# Non-5xx statuses the identity provider returns for reasons unrelated to the
+# credentials: 404 when the sign-in service is (re)deploying / a step URL is
+# temporarily missing, 429 when we are rate limited.
+_TRANSIENT_LOGIN_STATUSES = frozenset({404, 429})
+
+
+def _is_transient_login_status(status: int) -> bool:
+    """True when a login-step HTTP status is an upstream problem, not bad credentials."""
+    return status >= 500 or status in _TRANSIENT_LOGIN_STATUSES
+
+
 class _FormParser(HTMLParser):
     """Extract the first <form> action and all hidden/input fields."""
 
@@ -216,7 +227,7 @@ class EudaApiClient:
         async with await self._get(authorize_url) as resp:
             signin_url = str(resp.url)
             signin_html = await resp.text()
-            if resp.status >= 500:
+            if _is_transient_login_status(resp.status):
                 raise ApiError(
                     f"Identity provider error on sign-in page (HTTP {resp.status})",
                     status=resp.status,
@@ -244,7 +255,7 @@ class EudaApiClient:
         _LOGGER.debug(
             "login step3: after identifier POST status=%s url=%s", status, authenticate_url
         )
-        if status >= 500:
+        if _is_transient_login_status(status):
             raise ApiError(
                 f"Identity provider error on identifier step (HTTP {status})",
                 status=status,
@@ -285,10 +296,11 @@ class EudaApiClient:
                 _LOGGER.debug(
                     "login step4: HTTP %s body[:500]=%s", resp.status, landing_html[:500]
                 )
-                # 5xx is the identity provider failing, not our credentials —
-                # surface it as a retryable ApiError so the coordinator keeps
-                # the session alive instead of demanding reauthentication.
-                if resp.status >= 500:
+                # 5xx / 404 / 429 is the identity provider failing (or
+                # throttling us), not our credentials — surface it as a
+                # retryable ApiError so the coordinator keeps the entry alive
+                # instead of demanding reauthentication.
+                if _is_transient_login_status(resp.status):
                     raise ApiError(
                         f"Identity provider error (HTTP {resp.status})",
                         status=resp.status,
