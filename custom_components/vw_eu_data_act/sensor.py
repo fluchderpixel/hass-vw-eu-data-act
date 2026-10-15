@@ -24,10 +24,14 @@ from .data import (
     UNIT_RESOLVERS,
     CuratedSensor,
     DataPoint,
+    curated_has_reading,
     detect_dataset_format,
     find_by_field,
-    friendly_name,
+    normalize_unit,
+    parse_timestamp,
+    raw_entity_name,
     resolve_distance_unit,
+    tenths_to_units,
 )
 from .entity import EudaEntity
 
@@ -96,7 +100,6 @@ async def async_setup_entry(
     @callback
     def _add_new_entities() -> None:
         points: dict[str, DataPoint] = coordinator.data or {}
-        present_fields = {dp.field_name for dp in points.values()}
 
         # Detect dataset format and select appropriate curated group
         format_type = detect_dataset_format(points)
@@ -120,10 +123,20 @@ async def async_setup_entry(
             # Special handling for timestamp sensors (e.g., "mileage.timestamp" or "mileage.value.timestamp")
             if ".timestamp" in curated.field_name:
                 base_field = curated.field_name.replace(".timestamp", "")
-                if base_field in present_fields:
+                base_dp = find_by_field(points, base_field)
+                if base_dp is not None and base_dp.timestamp is not None:
                     entities.append(EudaCuratedSensor(coordinator, curated))
                     added_curated.add(curated.field_name)
-            elif curated.field_name in present_fields:
+                continue
+
+            # Being listed in the dataset is not enough: a vehicle without the
+            # hardware reports the field every cycle with no value or a
+            # sentinel. Waiting for a real reading keeps those entities out of
+            # the registry entirely instead of showing them permanently empty.
+            # This loop re-runs on every refresh, so the entity still appears
+            # the moment a usable value turns up.
+            dp = find_by_field(points, curated.field_name)
+            if dp is not None and curated_has_reading(dp, curated):
                 entities.append(EudaCuratedSensor(coordinator, curated))
                 added_curated.add(curated.field_name)
 
@@ -138,6 +151,11 @@ async def async_setup_entry(
 
         if entities:
             async_add_entities(entities)
+
+    # One diagnostic sensor answers "which portal ZIP is HA showing?" without
+    # an attribute on every entity (which would write a state row per entity
+    # per refresh).
+    async_add_entities([EudaLastDatasetSensor(coordinator)])
 
     _add_new_entities()
     entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
@@ -165,6 +183,8 @@ class EudaCuratedSensor(EudaEntity, SensorEntity):
             self._attr_state_class = SensorStateClass(curated.state_class)
         if curated.suggested_display_precision is not None:
             self._attr_suggested_display_precision = curated.suggested_display_precision
+        if curated.diagnostic:
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def native_value(self):
@@ -188,6 +208,15 @@ class EudaCuratedSensor(EudaEntity, SensorEntity):
 
         raw_value = dp.value
 
+        # Drop protocol sentinels ("unsupported" / "invalid") before anything
+        # else, so they can never be transformed into a plausible measurement.
+        if self._curated.sentinels:
+            from .data import strip_sentinel
+
+            raw_value = strip_sentinel(raw_value, self._curated.sentinels)
+            if raw_value is None:
+                return self._sticky(None)
+
         # Apply transforms if specified
         if self._curated.transform:
             if self._curated.transform == "decikelvin_to_celsius":
@@ -196,16 +225,30 @@ class EudaCuratedSensor(EudaEntity, SensorEntity):
                 transformed = decikelvin_to_celsius(dp.raw_value)
                 return self._sticky(transformed)
 
-            elif self._curated.transform == "abs":
-                from .data import abs_value
+            elif self._curated.transform == "service_interval":
+                from .data import service_interval_remaining
 
-                transformed = abs_value(raw_value)
+                transformed = service_interval_remaining(raw_value)
                 return self._sticky(transformed)
 
             elif self._curated.transform == "fuel_consumption":
                 from .data import fuel_consumption_l_per_1000km_to_l_per_100km
 
                 transformed = fuel_consumption_l_per_1000km_to_l_per_100km(raw_value)
+                return self._sticky(transformed)
+
+            elif self._curated.transform == "tenths":
+                return self._sticky(tenths_to_units(raw_value))
+
+            elif self._curated.transform == "timestamp":
+                # ISO strings stay strings in parse_value; a timestamp device
+                # class needs a tz-aware datetime.
+                return self._sticky(parse_timestamp(dp.raw_value))
+
+            elif self._curated.transform == "charging_time":
+                from .data import strip_charging_time_sentinel
+
+                transformed = strip_charging_time_sentinel(raw_value)
                 return self._sticky(transformed)
 
         return self._sticky(_shorten_enum_value(dp, raw_value))
@@ -223,6 +266,22 @@ class EudaCuratedSensor(EudaEntity, SensorEntity):
         return cur.unit
 
 
+class EudaLastDatasetSensor(EudaEntity, SensorEntity):
+    """Diagnostic: filename of the portal ZIP the current data came from."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:folder-zip-outline"
+    _attr_name = "Last dataset"
+
+    def __init__(self, coordinator: EudaCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.vin}_last_dataset"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.latest_dataset_name
+
+
 class EudaRawSensor(EudaEntity, SensorEntity):
     """A raw data point exposed as a disabled-by-default diagnostic sensor."""
 
@@ -234,9 +293,16 @@ class EudaRawSensor(EudaEntity, SensorEntity):
         dp = coordinator.data[key]
         self._key = key
         self._attr_unique_id = raw_unique_id(coordinator.vin, key)
-        self._attr_name = friendly_name(dp.field_name, dp.description)
-        if dp.unit and dp.type_hint in ("int", "float"):
-            self._attr_native_unit_of_measurement = dp.unit
+        self._attr_name = raw_entity_name(dp.field_name, dp.description)
+        # Only attach a unit when the value is numeric and the dictionary names
+        # a unit the raw value is already expressed in; see normalize_unit.
+        if dp.type_hint in ("int", "float"):
+            unit, device_class = normalize_unit(dp.unit)
+            if unit:
+                self._attr_native_unit_of_measurement = unit
+                self._attr_state_class = SensorStateClass.MEASUREMENT
+                if device_class:
+                    self._attr_device_class = SensorDeviceClass(device_class)
 
     @property
     def native_value(self):

@@ -39,7 +39,6 @@ async def async_setup_entry(
     @callback
     def _add_new_entities() -> None:
         points: dict[str, DataPoint] = coordinator.data or {}
-        present_fields = {dp.field_name for dp in points.values()}
 
         # Detect dataset format and select appropriate curated group
         format_type = detect_dataset_format(points)
@@ -51,9 +50,28 @@ async def async_setup_entry(
         for curated in curated_binary:
             if curated.field_name in added:
                 continue
-            if curated.field_name in present_fields:
-                entities.append(EudaBinarySensor(coordinator, curated))
-                added.add(curated.field_name)
+            # Presence in the dataset is not enough: a vehicle without a
+            # sunroof, spoiler or service hatch reports those fields every
+            # cycle carrying only the "unsupported"/"invalid" sentinel, which
+            # decodes to None. Skip until the field decodes to a real state;
+            # this loop re-runs on every refresh, so nothing is lost if the
+            # reading only appears later.
+            dp = find_by_field(points, curated.field_name)
+            if dp is None:
+                continue
+            if (
+                decode_binary_state(
+                    dp.value,
+                    curated.encoding,
+                    curated.invert,
+                    on_values=curated.on_values,
+                    off_values=curated.off_values,
+                )
+                is None
+            ):
+                continue
+            entities.append(EudaBinarySensor(coordinator, curated))
+            added.add(curated.field_name)
 
         if entities:
             async_add_entities(entities)
@@ -86,6 +104,10 @@ class EudaBinarySensor(EudaEntity, BinarySensorEntity):
         dp = find_by_field(self.coordinator.data or {}, self._curated.field_name)
         value = dp.value if dp is not None else None
         result = decode_binary_state(
-            value, self._curated.encoding, self._curated.invert
+            value,
+            self._curated.encoding,
+            self._curated.invert,
+            on_values=self._curated.on_values,
+            off_values=self._curated.off_values,
         )
         return self._sticky(result)
